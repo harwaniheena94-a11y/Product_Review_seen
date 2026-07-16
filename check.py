@@ -3,12 +3,13 @@ import os
 import html
 import uuid
 from datetime import datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs
 
 import pandas as pd
 import requests
+import uvicorn
+from fastapi import FastAPI, Form
+from fastapi.responses import HTMLResponse, Response
 
 
 def load_environment_file():
@@ -176,6 +177,7 @@ button { width:100%; border:0; border-radius:4px; background:var(--accent); colo
 </style></head><body><main><div class="brand"><span class="brand-mark">P</span>ProductReview Leads</div><h1>Export lead emails</h1><p>Select the inclusive date range for the ProductReview emails you want in the Excel file.</p><form method="post" action="/generate"><div class="dates"><label>From date<input type="date" name="start_date" required></label><label>To date<input type="date" name="end_date" required></label></div><button type="submit">Generate preview</button></form>{{CONTENT}}<div class="notice">The file includes leads received from the configured ProductReview sender.</div></main><script>document.querySelector('form').addEventListener('submit', function () { const b=this.querySelector('button'); b.disabled=true; b.textContent='Generating preview...'; });</script></body></html>"""
 
 EXPORTS = {}
+app = FastAPI(title="ProductReview Leads")
 
 
 def render_page(content=""):
@@ -194,63 +196,57 @@ def preview_html(records, token):
 <form class="download-form" method="post" action="/download"><input type="hidden" name="token" value="{token}"><button type="submit">Download Excel</button></form>'''
 
 
-class LeadExportHandler(BaseHTTPRequestHandler):
-    def send_html(self, content, status=200):
-        self.send_response(status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(content.encode())))
-        self.end_headers()
-        self.wfile.write(content.encode())
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return render_page()
 
-    def do_HEAD(self):
-        """Respond successfully to HEAD requests without sending a response body."""
-        self.send_response(200)
-        self.end_headers()
 
-    def do_GET(self):
-        self.send_html(render_page() if self.path == "/" else "Not found", 200 if self.path == "/" else 404)
+@app.head("/")
+def home_head():
+    """Respond successfully to health checks and other HEAD requests."""
+    return Response(status_code=200)
 
-    def do_POST(self):
-        if self.path not in ("/generate", "/download"):
-            self.send_html("Not found", 404)
-            return
-        try:
-            size = int(self.headers.get("Content-Length", 0))
-            data = parse_qs(self.rfile.read(size).decode())
-            if self.path == "/download":
-                token = data.get("token", [""])[0]
-                export = EXPORTS.pop(token, None)
-                if not export:
-                    raise ValueError("This preview has expired. Please generate it again.")
-                filename, workbook = export
-                self.send_response(200)
-                self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-                self.send_header("Content-Length", str(len(workbook)))
-                self.end_headers()
-                self.wfile.write(workbook)
-                return
 
-            start_date = datetime.strptime(data.get("start_date", [""])[0], "%Y-%m-%d").date()
-            end_date = datetime.strptime(data.get("end_date", [""])[0], "%Y-%m-%d").date()
-            if end_date < start_date:
-                raise ValueError("The end date must be the same as or later than the start date.")
-            records = [message_to_record(message) for message in get_messages(start_date, end_date)]
-            workbook = create_workbook(records).getvalue()
-            filename = f"ProductReview_Leads_{start_date:%Y%m%d}_{end_date:%Y%m%d}.xlsx"
-            token = uuid.uuid4().hex
-            EXPORTS[token] = (filename, workbook)
-            self.send_html(render_page(preview_html(records, token)))
-        except (ValueError, requests.RequestException, KeyError) as error:
-            self.send_html(render_page(f'<div class="notice error">{html.escape(str(error))}</div>'), 400)
+@app.post("/generate", response_class=HTMLResponse)
+def generate_preview(start_date: str = Form(...), end_date: str = Form(...)):
+    try:
+        start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        if end < start:
+            raise ValueError("The end date must be the same as or later than the start date.")
+
+        records = [message_to_record(message) for message in get_messages(start, end)]
+        workbook = create_workbook(records).getvalue()
+        filename = f"ProductReview_Leads_{start:%Y%m%d}_{end:%Y%m%d}.xlsx"
+        token = uuid.uuid4().hex
+        EXPORTS[token] = (filename, workbook)
+        return render_page(preview_html(records, token))
+    except (ValueError, requests.RequestException, KeyError) as error:
+        return HTMLResponse(
+            render_page(f'<div class="notice error">{html.escape(str(error))}</div>'),
+            status_code=400,
+        )
+
+
+@app.post("/download")
+def download_excel(token: str = Form(...)):
+    export = EXPORTS.pop(token, None)
+    if not export:
+        return HTMLResponse(
+            render_page('<div class="notice error">This preview has expired. Please generate it again.</div>'),
+            status_code=400,
+        )
+
+    filename, workbook = export
+    return Response(
+        content=workbook,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 if __name__ == "__main__":
-    host = "0.0.0.0"
+    host = "127.0.0.1"
     port = int(os.environ.get("PORT", 8000))
-
-    server = HTTPServer((host, port), LeadExportHandler)
-
-    print(f"Server running on http://{host}:{port}")
-
-    server.serve_forever()
+    print(f"Open http://{host}:{port} in your browser")
+    uvicorn.run(app, host=host, port=port)
