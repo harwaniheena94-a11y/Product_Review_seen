@@ -241,6 +241,11 @@ class LeadExportHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    server = HTTPServer(("127.0.0.1", 8000), LeadExportHandler)
-    print("Open http://127.0.0.1:8000 in your browser")
+    host = "0.0.0.0"
+    port = int(os.environ.get("PORT", 8000))
+
+    server = HTTPServer((host, port), LeadExportHandler)
+
+    print(f"Server running on http://{host}:{port}")
+
     server.serve_forever()
