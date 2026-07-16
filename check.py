@@ -202,6 +202,11 @@ class LeadExportHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content.encode())
 
+    def do_HEAD(self):
+        """Respond successfully to HEAD requests without sending a response body."""
+        self.send_response(200)
+        self.end_headers()
+
     def do_GET(self):
         self.send_html(render_page() if self.path == "/" else "Not found", 200 if self.path == "/" else 404)
 
