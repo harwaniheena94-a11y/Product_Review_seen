@@ -32,6 +32,9 @@ load_environment_file()
 
 USER_EMAIL = os.getenv("PRODUCT_REVIEW_USER_EMAIL", "leads@sunboost.com.au")
 SENDER = os.getenv("PRODUCT_REVIEW_SENDER", "dev@productreview.com.au")
+SOLARCRM_IMPORT_URL = "https://app.solarcrm.com.au/backend/api/leads/import/excel/internal"
+SOLARCRM_INTERNAL_SECRET = os.getenv("SOLARCRM_INTERNAL_SECRET")
+SOLARCRM_ORGANIZATION_ID = os.getenv("SOLARCRM_ORGANIZATION_ID", "2")
 
 
 def get_credentials():
@@ -122,29 +125,34 @@ def message_to_record(message):
     mobile_number = answers.get("What is your mobile number?", "").replace(" ", "")
     if mobile_number.startswith("+61"):
         mobile_number = "" + mobile_number[3:]
+    mobile_number = int(mobile_number) if mobile_number.isdigit() else None
     lead_date = message.get("receivedDateTime", "")
     if lead_date:
-        lead_date = datetime.fromisoformat(lead_date.replace("Z", "+00:00")).strftime("%m/%d/%Y")
-    postcode = answers.get("What is your postcode?", "")
+        lead_date = datetime.fromisoformat(
+    lead_date.replace("Z", "+00:00")
+).date()
+    postcode = answers.get("What is your postcode?", "").strip()
+
+    postcode = int(postcode) if postcode.isdigit() else None
 
     return {
-        "Title": "",
+        "Title": None,
         "First Name": name_parts[0] if name_parts else "",
         "Last Name": name_parts[1] if len(name_parts) > 1 else "",
         "Mobile Number": mobile_number,
-        "Home Phone": "",
+        "Home Phone": None,
         "Email": answers.get("What is your email address?", ""),
         "Lead Source": "ProductReview",
-        "Fax": "",
-        "Notes": "",
-        "Unit Type": "",
-        "Unit Number": "",
-        "Address Type": "",
+        "Fax": None,
+        "Notes": None,
+        "Unit Type": None,
+        "Unit Number": None,
+        "Address Type": None,
         "Address": answers.get("What is the street address where the system will be installed?", ""),
-        "Street Number": "",
-        "Street Name": "",
-        "Street Type": "",
-        "Suburb": "",
+        "Street Number": None,
+        "Street Name": None,
+        "Street Type": None,
+        "Suburb": None,
         "Post Code": postcode,
         "State": state_from_postcode(postcode),
         "Lead Date": lead_date,
@@ -172,7 +180,7 @@ form { margin-top:32px; padding:28px; border:1px solid var(--line); border-radiu
 .dates { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin:24px 0 28px; } label { font-weight:700; font-size:14px; } input { width:100%; margin-top:8px; border:1px solid #aebcc4; border-radius:4px; padding:12px; color:var(--ink); font:inherit; } input:focus { outline:3px solid #bce6e2; border-color:var(--accent); }
 button { width:100%; border:0; border-radius:4px; background:var(--accent); color:#fff; padding:13px 18px; font:700 16px Arial,sans-serif; cursor:pointer; } button:hover { background:var(--accent-dark); } button:disabled { opacity:.7; cursor:wait; }
 .notice { margin-top:20px; padding:12px; border-left:3px solid var(--accent); background:#edf8f7; color:#285653; font-size:14px; } .error { border-color:#b42318; background:#fff2f0; color:#8a1c15; }
-.preview { margin-top:24px; overflow-x:auto; border:1px solid var(--line); border-radius:4px; } table { width:100%; border-collapse:collapse; font-size:14px; } th,td { padding:10px 12px; text-align:left; border-bottom:1px solid var(--line); white-space:nowrap; } th { background:#f3f6f6; } tr:last-child td { border-bottom:0; } .download-form { margin-top:20px; padding:0; border:0; box-shadow:none; background:transparent; }
+.preview { margin-top:24px; overflow-x:auto; border:1px solid var(--line); border-radius:4px; } table { width:100%; border-collapse:collapse; font-size:14px; } th,td { padding:10px 12px; text-align:left; border-bottom:1px solid var(--line); white-space:nowrap; } th { background:#f3f6f6; } tr:last-child td { border-bottom:0; } .file-actions { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:20px; } .file-actions form { margin:0; padding:0; border:0; box-shadow:none; background:transparent; } .file-actions .upload-button { background:#1265a8; } .file-actions .upload-button:hover { background:#0b4d82; }
 @media (max-width:520px) { main { padding-top:48px; } h1 { font-size:28px; } form { padding:22px; } .dates { grid-template-columns:1fr; } }
 </style></head><body><main><div class="brand"><span class="brand-mark">P</span>ProductReview Leads</div><h1>Export lead emails</h1><p>Select the inclusive date range for the ProductReview emails you want in the Excel file.</p><form method="post" action="/generate"><div class="dates"><label>From date<input type="date" name="start_date" required></label><label>To date<input type="date" name="end_date" required></label></div><button type="submit">Generate preview</button></form>{{CONTENT}}<div class="notice">The file includes leads received from the configured ProductReview sender.</div></main><script>document.querySelector('form').addEventListener('submit', function () { const b=this.querySelector('button'); b.disabled=true; b.textContent='Generating preview...'; });</script></body></html>"""
 
@@ -193,7 +201,7 @@ def preview_html(records, token):
         rows = '<tr><td colspan="7">No leads found for this date range.</td></tr>'
     return f'''<div class="notice"><strong>Preview ready:</strong> {len(records)} lead(s) found. Review the results, then download when ready.</div>
 <div class="preview"><table><thead><tr><th>First name</th><th>Last name</th><th>Email</th><th>Mobile</th><th>Postcode</th><th>State</th><th>Lead date</th></tr></thead><tbody>{rows}</tbody></table></div>
-<form class="download-form" method="post" action="/download"><input type="hidden" name="token" value="{token}"><button type="submit">Download Excel</button></form>'''
+<div class="file-actions"><form method="post" action="/download"><input type="hidden" name="token" value="{token}"><button type="submit">Download Excel</button></form><form method="post" action="/upload"><input type="hidden" name="token" value="{token}"><button class="upload-button" type="submit">Upload Excel</button></form></div>'''
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -219,7 +227,7 @@ def generate_preview(start_date: str = Form(...), end_date: str = Form(...)):
         workbook = create_workbook(records).getvalue()
         filename = f"ProductReview_Leads_{start:%Y%m%d}_{end:%Y%m%d}.xlsx"
         token = uuid.uuid4().hex
-        EXPORTS[token] = (filename, workbook)
+        EXPORTS[token] = (filename, workbook, records)
         return render_page(preview_html(records, token))
     except (ValueError, requests.RequestException, KeyError) as error:
         return HTMLResponse(
@@ -230,18 +238,65 @@ def generate_preview(start_date: str = Form(...), end_date: str = Form(...)):
 
 @app.post("/download")
 def download_excel(token: str = Form(...)):
-    export = EXPORTS.pop(token, None)
+    export = EXPORTS.get(token)
     if not export:
         return HTMLResponse(
             render_page('<div class="notice error">This preview has expired. Please generate it again.</div>'),
             status_code=400,
         )
 
-    filename, workbook = export
+    filename, workbook, _ = export
     return Response(
         content=workbook,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/upload", response_class=HTMLResponse)
+def upload_excel(token: str = Form(...)):
+    export = EXPORTS.get(token)
+    if not export:
+        return HTMLResponse(
+            render_page('<div class="notice error">This preview has expired. Please generate it again.</div>'),
+            status_code=400,
+        )
+    if not SOLARCRM_INTERNAL_SECRET:
+        return HTMLResponse(
+            render_page('<div class="notice error">Missing SOLARCRM_INTERNAL_SECRET configuration.</div>'),
+            status_code=500,
+        )
+
+    filename, workbook, records = export
+    try:
+        response = requests.post(
+            SOLARCRM_IMPORT_URL,
+            headers={
+                "X-Internal-Secret": SOLARCRM_INTERNAL_SECRET,
+                "OrganizationId": SOLARCRM_ORGANIZATION_ID,
+            },
+            files={
+                "files[]": (
+                    filename,
+                    workbook,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+    except requests.RequestException as error:
+        return HTMLResponse(
+            render_page(
+                preview_html(records, token)
+                + f'<div class="notice error">Upload failed: {html.escape(str(error))}</div>'
+            ),
+            status_code=502,
+        )
+
+    return render_page(
+        preview_html(records, token)
+        + '<div class="notice"><strong>Upload complete:</strong> The Excel file was sent to SolarCRM.</div>'
     )
 
 
